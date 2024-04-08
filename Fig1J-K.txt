@@ -1,0 +1,28 @@
+library(readr)
+library(Seurat)
+library(AUCell)
+library(tidyverse)
+library(clusterProfiler)
+library(ggplot2)
+
+scRNAsub <- read_rds('')
+scRNAsub <- NormalizeData(scRNAsub) %>% FindVariableFeatures()
+
+Idents(scRNAsub) <- 'group'
+scRNAsub <- subset(scRNAsub,idents = 'Heso_cancer6_normal',invert=T)
+
+H <- read.gmt("")
+cells_rankings <- AUCell_buildRankings(as.matrix(scRNAsub@assays$RNA@data))  
+unique(H$term)
+geneSets <- lapply(unique(H$term), function(x){H$gene[H$term == x]})
+names(geneSets) <- unique(H$term)
+cells_AUC <- AUCell_calcAUC(geneSets, cells_rankings, aucMaxRank=nrow(cells_rankings)*0.1)
+length(rownames(cells_AUC@assays@data$AUC))
+
+geneSet <- "Hypoxia"
+aucs <- as.numeric(getAUC(cells_AUC)[geneSet, ])
+scRNAsub$Hypoxia_AUC <- aucs
+
+geneSet <- "Ferroptosis"
+aucs <- as.numeric(getAUC(cells_AUC)[geneSet, ])
+scRNAsub$Ferroptosis_AUC2 <- aucs

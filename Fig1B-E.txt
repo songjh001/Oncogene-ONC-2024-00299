@@ -1,0 +1,291 @@
+
+dir.create('results')
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(magrittr)
+library(gtools)
+library(stringr)
+library(Matrix)
+library(tidyverse)
+library(patchwork)
+library(data.table)
+library(RColorBrewer)
+library(ggpubr)
+
+dir_name=c('N1','N2','T1','T2')
+datalist=list()
+for (i in 1:length(dir_name)){
+  print(dir_name[i])
+  dir.10x = paste0("GSE149655_RAW/",dir_name[i])
+  my.data <- Read10X(data.dir = dir.10x) 
+  colnames(my.data)=paste0(dir_name[i],'_',colnames(my.data))
+  datalist[[i]]=CreateSeuratObject(counts = my.data, project = dir_name[i], 
+                                  
+                                   min.cells = 3, min.features = 250)
+  datalist[[i]]$sample=dir_name[i]
+}
+#修改名称
+names(datalist)=dir_name
+
+for (i in 1:length(datalist)){
+  sce <- datalist[[i]]
+  sce[["percent.mt"]] <- PercentageFeatureSet(sce, pattern = "^MT-")
+  sce[["percent.Ribo"]] <- PercentageFeatureSet(sce, pattern = "^RP[SL]")
+  datalist[[i]] <- sce
+  rm(sce)
+}
+
+
+sce <- merge(datalist[[1]],y=datalist[2:length(datalist)])
+
+
+raw_meta=sce@meta.data
+raw_count <- table(raw_meta$sample)
+raw_count
+pearplot_befor<-VlnPlot(sce,group.by ='sample', 
+                        features = c("nFeature_RNA", "nCount_RNA", "percent.mt","percent.Ribo"),
+                        pt.size = 0, 
+                        ncol = 4)
+pearplot_befor
+
+Feature_ber1<-FeatureScatter(sce,feature1 = 'nFeature_RNA',feature2 = 'nCount_RNA',group.by = 'sample')
+Feature_ber2<-FeatureScatter(sce,feature1 = 'percent.mt',feature2 = 'nCount_RNA',group.by = 'sample')
+Feature_ber3<-FeatureScatter(sce,feature1 = 'percent.mt',feature2 = 'nFeature_RNA',group.by = 'sample')
+Feature_ber1=Feature_ber1+theme(legend.position = 'none')
+Feature_ber2=Feature_ber2+theme(legend.position = 'none')
+library(ggpubr)
+Feature_ber<-ggarrange(Feature_ber1,Feature_ber2,Feature_ber3,ncol = 3,nrow = 1,widths = c(1,1,1.2))
+
+
+datalist <- lapply(X = datalist, FUN = function(x) {
+  x<-subset(x,subset = nFeature_RNA > 100 & 
+              nFeature_RNA < 7500 & 
+              percent.mt < 15 &
+              nCount_RNA > 1000 )
+})
+
+sce <- merge(datalist[[1]],y=datalist[2:length(datalist)])
+clean_meta=sce@meta.data
+
+clean_count <- table(clean_meta$sample)
+clean_count
+pearplot_after <- VlnPlot(sce,group.by ='sample', 
+                          features = c("nFeature_RNA", "nCount_RNA", "percent.mt","percent.Ribo"),
+                          pt.size = 0, 
+                          ncol = 4)
+pearplot_after
+
+Feature_aft1<-FeatureScatter(sce,feature1 = 'nFeature_RNA',feature2 = 'nCount_RNA',group.by = 'sample')
+Feature_aft2<-FeatureScatter(sce,feature1 = 'percent.mt',feature2 = 'nCount_RNA',group.by = 'sample')
+Feature_aft3<-FeatureScatter(sce,feature1 = 'percent.mt',feature2 = 'nFeature_RNA',group.by = 'sample')
+Feature_aft1=Feature_aft1+theme(legend.position = 'none')
+Feature_aft2=Feature_aft2+theme(legend.position = 'none')
+Feature_aft<-ggarrange(Feature_aft1,Feature_aft2,Feature_aft3,ncol = 3,nrow = 1,widths = c(1,1,1.2))
+#
+save(datalist,file = 'results/datalist.RData')
+
+sce <- NormalizeData(sce, normalization.method = "LogNormalize", scale.factor = 10000)
+sce <- FindVariableFeatures(sce, 
+                            selection.method = "vst", 
+                            nfeatures = 2000,
+                            mean.cutoff=c(0.0125,3),
+                            dispersion.cutoff =c(1.5,Inf))
+sce <- ScaleData(sce, features =  rownames(sce))
+sce <- RunPCA(sce, features = VariableFeatures(sce)) 
+DimPlot(sce, reduction = "pca") 
+ElbowPlot(sce, ndims=50, reduction="pca") 
+
+sce <- RunUMAP(sce, dims=1:35, reduction="pca")
+raw.ump<-DimPlot(sce,group.by = 'sample',
+        reduction="umap", 
+        label = "T", pt.size = 0.2,
+        label.size = 4) +
+  theme(axis.line = element_blank(), 
+        axis.text = element_blank(), 
+        axis.ticks = element_blank(), 
+        axis.title = element_blank())
+raw.ump
+
+
+rm(sce)
+
+load('results/datalist.RData')
+for (i in 1:length(datalist)){
+  datalist[[i]]<-NormalizeData(datalist[[i]], normalization.method = "LogNormalize", scale.factor = 10000)
+  datalist[[i]]<-FindVariableFeatures(datalist[[i]], 
+                                      selection.method = "vst", 
+                                      nfeatures = 2000,
+                                      mean.cutoff=c(0.0125,3),
+                                      dispersion.cutoff =c(1.5,Inf))
+}
+datalist <- FindIntegrationAnchors(object.list = datalist, dims = 1:35,
+                                   reduction = c("cca", "rpca")[1])
+sce <- IntegrateData(anchorset = datalist, dims = 1:35)
+
+#ScaleData
+DefaultAssay(sce) <- "integrated"
+sce <- ScaleData(sce, features = rownames(sce))
+
+sce=FindVariableFeatures(sce, 
+                         selection.method = "vst", 
+                         nfeatures = 2000,
+                         mean.cutoff=c(0.0125,3),
+                         dispersion.cutoff =c(1.5,Inf))
+
+
+sce <- RunPCA(sce, features = VariableFeatures(sce)) 
+dimplot1 <- DimPlot(sce, reduction = "pca",group.by = 'sample') 
+elbowplot1 <- ElbowPlot(sce, ndims=50, reduction="pca") 
+sc_pca <- dimplot1+elbowplot1
+sc_pca
+
+
+Dims <- 30
+
+sce <- RunUMAP(sce, dims=1:Dims, reduction="pca")
+
+sce <- RunTSNE(sce, 
+               dims=1:Dims, 
+               reduction="pca",
+               perplexity=30,
+               max_iter=1000)
+
+library(clustree)
+sce <- FindNeighbors(sce, dims = 1:Dims)
+sce <- FindClusters(
+  object = sce,
+  resolution = c(seq(.1,1,.1))
+)
+clustree(sce@meta.data, prefix = "integrated_snn_res.")
+colnames(sce@meta.data)
+
+Resolution <- 0.3
+sce <- FindNeighbors(object = sce, dims = 1:Dims)
+sce <- FindClusters(object = sce, resolution = Resolution)
+
+figs1ab<-ggarrange(pearplot_befor,Feature_ber,nrow = 2,ncol = 1,labels = c('A','B'))
+figs1cd<-ggarrange(pearplot_after,Feature_aft,nrow = 2,ncol = 1,labels = c('C','D'))
+figs1<-ggarrange(figs1ab,figs1cd,sc_pca,nrow = 3,ncol = 1,labels = c('','','E'))
+ggsave(filename = 'results/FigS1.pdf',plot = figs1,he=20,width = 20)
+ggsave(filename = 'results/FigS1.jpg',plot = figs1,he=20,width = 20,dpi = 300)
+
+library(randomcoloR)
+allcolour <- distinctColorPalette(60) 
+length(table(sce@active.ident))
+mycolor = allcolour[1:length(table(sce$seurat_clusters))]
+
+cell_mark.gmt <- function(tissu,immnu=T,file){
+  data=read.delim('human.cellmark.txt',sep='\t',header = T)
+  #tissu
+  if (length(tissu)==1){
+    cell_mark=data[which(data$tissueType==tissu),]
+  }else if(length(tissu>1)){
+    cell_mark=data.frame()
+    for (i in tissu){
+      cell_mark_temp=data[which(data$tissueType==i),]
+      cell_mark=rbind(cell_mark,cell_mark_temp)
+    }
+  }
+  gene_symbol=read.delim('GeneTag.genecode.v32.txt',sep='\t',header = T)
+  gene_symbol=as.character(gene_symbol[which(gene_symbol$TYPE=='protein_coding'),]$SYMBOL)
+  #dim(cell_mark)
+  cell_type=as.character(unique(cell_mark$cellName))
+  #class(cell_mark)
+  cell_mark1 <- cell_mark[, c("cellName","geneSymbol")]
+  
+  if(file.exists(file)){
+    file.remove(file)
+  }
+  for (i in cell_type){
+    cell_mark2=cell_mark1[which(cell_mark1$cellName==i),]
+    gene=as.character(unique(unlist(stringr::str_split(cell_mark2$geneSymbol,', '))))
+    gene=intersect(gene_symbol,gene)
+    if (length(gene)>0){
+      gene1=paste0(gene,collapse = '\t')
+      write.table(paste0(i,'\tna\t',gene1,collapse = '\t'),file = file,row.names = F,col.names = F,quote = F,append = T)
+    }
+  }
+  if (immnu==T){
+    imm_22<-read.delim('22.immnu.marker.txt',sep='\t',row.names = 1,header = T,check.names = F)
+    for (ii in colnames(imm_22)){
+      gene=rownames(imm_22[which(imm_22[,ii,drop=F]==1),])
+      gene1=paste0(gene,collapse = '\t')
+      write.table(paste0(ii,'\tna\t',gene1,collapse = '\t'),file = 'cell_mark.gmt',row.names = F,col.names = F,quote = F,append = T)
+    }
+  }
+  return(paste0(getwd(),'/',file))
+}
+
+tissu=c('Lung')
+human_cell_anno<-cell_mark.gmt(tissu = tissu,immnu=T,file='tissu.txt')
+
+test_cout <- sce@assays$RNA@counts
+colnames(test_cout)=gsub('-','__',colnames(test_cout))
+rownames(test_cout)=gsub('-','__',rownames(test_cout))
+
+test_cell<-as.data.frame(sce$seurat_clusters)
+test_merge<-merge(data.frame(cell=colnames(test_cout),t(test_cout)),
+                  data.frame(cell=gsub('-','__',rownames(test_cell)),
+                             seurat_clusters=paste0('C',test_cell$`sce$seurat_clusters`)),
+                  by='cell')
+test_merge=test_merge[,-1]
+test_merge=aggregate(.~seurat_clusters,test_merge,median)
+rownames(test_merge)=test_merge$seurat_clusters
+test_merge=test_merge[,-1]
+test_merge=t(test_merge)
+library(GSVA)
+library(GSEABase)
+cell_gmt <- getGmt(human_cell_anno,
+                   collectionType=BroadCollection(category="c2"),
+                   geneIdType=SymbolIdentifier())
+cluster_ssGSEA <- gsva(as.matrix(test_merge),
+                       cell_gmt,
+                       method='ssgsea',
+                       min.sz=2,
+                       max.sz=500,
+                       verbose=TRUE)
+save(cluster_ssGSEA,file = 'results/cluster_ssGSEA.RData')
+cell_anno<-data.frame()
+
+for (i in 1:ncol(cluster_ssGSEA)){
+  cell_anno1=data.frame(seurat_clusters=colnames(cluster_ssGSEA)[i],
+                        cell_type=rownames(cluster_ssGSEA[cluster_ssGSEA[,i]==max(cluster_ssGSEA[,i]),,drop=F]))
+  cell_anno=rbind.data.frame(cell_anno,cell_anno1)
+  
+}
+cell_anno
+table(cell_anno$seurat_clusters)
+table(cell_anno$cell_type)
+
+sce$cell_type=sce$seurat_clusters
+
+for (i in 1:nrow(cell_anno)){
+  sce$cell_type=gsub(paste0('^',gsub('C','',cell_anno$seurat_clusters[i]),'$'),as.character(cell_anno$cell_type[i]),sce$cell_type)
+}
+table(sce$cell_type)
+
+Logfc = 0.35
+
+Minpct = 0.15
+DefaultAssay(sce) <- "RNA"
+Idents(sce)<-'seurat_clusters'
+sce.markers <- FindAllMarkers(object = sce,logfc.threshold = Logfc, min.pct = Minpct,only.pos = T)
+sce.markers["pct.diff"]=sce.markers$pct.1-sce.markers$pct.2
+sce.markers <- sce.markers[sce.markers$p_val_adj<0.05,]
+length(unique(sce.markers$gene))
+head(sce.markers)
+write.table(sce.markers,'results/scRNA_marker_gene.txt',quote = F,row.names = F,sep='\t')
+
+
+Top5 <- sce.markers %>% group_by(cluster) %>% slice_max(n =5, order_by = avg_log2FC)  
+
+Top5 <- intersect(unique(Top5$gene),rownames(sce@assays$RNA@meta.features))
+
+sc_marker_dotplot <- DotPlot(object = sce, features = Top5,cols=c("blue", "red"),scale = T)+ 
+  RotatedAxis()+ ggtitle("Top 5 Marker Genes")+ 
+  theme(plot.title = element_text(hjust = 0.5)) +xlab('')
+
+sc_marker_dotplot
+
+

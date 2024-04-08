@@ -1,0 +1,33 @@
+counts <- GetAssayData(combined_seurat, slot = 'counts')
+
+anno <- data.frame(Idents(combined_seurat))
+gene_order <- "/mnt/data/home/tycloud/human_genes_pos.txt"
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix = counts,
+                                        annotations_file = anno,
+                                        delim="\t",
+                                        gene_order_file = gene_order,
+                                        min_max_counts_per_cell = c(100, +Inf),
+                                        ref_group_names = c("Macrophages", "T cell"))
+
+infercnv_obj = infercnv::run(infercnv_obj,
+                                 cutoff = 0.1,
+                                 out_dir = ".", 
+                                 cluster_by_groups = F,
+                                 k_obs_groups = 8,
+                                 HMM = FALSE,
+                                 denoise = TRUE,
+
+
+infercnv_obj = readRDS("~/inferCNV0209/run.final.infercnv_obj")
+expr.data = infercnv_obj@expr.data
+expr.scale <- scale(t(expr))
+tmp1 <- sweep(expr.scale, 2, apply(expr.scale, 2, min),'-')
+tmp2 <- apply(expr.scale, 2, max) - apply(expr.scale,2,min)
+expr_1 <- t(2*sweep(tmp1, 2, tmp2, "/")-1)
+cnv_score <- as.data.frame(colSums(expr_1 * expr_1))
+colnames(cnv_score)="cnv_score"
+cnv_score <- rownames_to_column(cnv_score, var='cell')
+value <- myeloid@meta.data$cnv_score
+thresthold <- median(value) - 1 * sd(value)
+myeloid@meta.data = myeloid@meta.data %>% mutate(condition=if_else(.$cnv_score <= thresthold,'non-malignant','malignant'))
+DimPlot(myeloid,group.by = 'condition')
